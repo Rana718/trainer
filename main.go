@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 )
 
 var steamDir = filepath.Join(os.Getenv("HOME"), ".local/share/Steam")
@@ -271,34 +272,13 @@ func main() {
 		"STEAM_COMPAT_DATA_PATH="+filepath.Join(steamDir, "steamapps/compatdata", selected.appID),
 		"STEAM_COMPAT_CLIENT_INSTALL_PATH="+steamDir,
 	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	// Detach into its own session so it survives after we exit
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "Failed to start:", err)
 		os.Exit(1)
 	}
 
-	fmt.Printf("Started (PID %d). Press Enter to stop, or Ctrl+C to detach.\n", cmd.Process.Pid)
-
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-
-	input := make(chan struct{}, 1)
-	go func() {
-		bufio.NewReader(os.Stdin).ReadString('\n')
-		input <- struct{}{}
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "Process exited with error:", err)
-		} else {
-			fmt.Println("Process finished.")
-		}
-	case <-input:
-		fmt.Println("Stopping...")
-		cmd.Process.Kill()
-	}
+	fmt.Printf("Started (PID %d). To stop: kill %d\n", cmd.Process.Pid, cmd.Process.Pid)
 }
