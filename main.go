@@ -218,7 +218,86 @@ func prompt(msg string) string {
 	return strings.TrimSpace(sc.Text())
 }
 
+func cmdSize() {
+	games := listGames()
+	fmt.Println("=== Installed Games (compatdata) ===")
+	for i, g := range games {
+		fmt.Printf("  [%d] %s (AppID: %s)\n", i+1, g.name, g.appID)
+	}
+	fmt.Println()
+
+	choice := prompt("Select game number: ")
+	idx := 0
+	fmt.Sscanf(choice, "%d", &idx)
+	if idx < 1 || idx > len(games) {
+		fmt.Fprintln(os.Stderr, "Invalid selection")
+		os.Exit(1)
+	}
+	selected := games[idx-1]
+
+	fmt.Println("\nScale options:")
+	fmt.Println("  [1] Low    (96 DPI  - 100%)")
+	fmt.Println("  [2] Medium (120 DPI - 125%)")
+	fmt.Println("  [3] High   (144 DPI - 150%)")
+	fmt.Println("  [4] XHigh  (192 DPI - 200%)")
+	fmt.Println("  [5] Custom (enter DPI manually)")
+	fmt.Println()
+
+	scaleChoice := prompt("Select scale: ")
+	scaleIdx := 0
+	fmt.Sscanf(scaleChoice, "%d", &scaleIdx)
+
+	dpiMap := map[int]int{1: 96, 2: 120, 3: 144, 4: 192}
+	dpi, ok := dpiMap[scaleIdx]
+	if !ok {
+		if scaleIdx == 5 {
+			raw := prompt("Enter DPI value: ")
+			fmt.Sscanf(raw, "%d", &dpi)
+			if dpi < 96 || dpi > 480 {
+				fmt.Fprintln(os.Stderr, "Invalid DPI (96-480)")
+				os.Exit(1)
+			}
+		} else {
+			fmt.Fprintln(os.Stderr, "Invalid selection")
+			os.Exit(1)
+		}
+	}
+
+	toolName := compatToolName(selected.appID)
+	protonPath := findProton(toolName)
+	if protonPath == "" {
+		protonPath = findProtonFallback(toolName)
+	}
+	if protonPath == "" {
+		fmt.Fprintf(os.Stderr, "Proton not found for tool: %s\n", toolName)
+		os.Exit(1)
+	}
+
+	wineBin := filepath.Join(filepath.Dir(protonPath), "files/bin/wine")
+	pfx := filepath.Join(steamDir, "steamapps/compatdata", selected.appID, "pfx")
+
+	cmd := exec.Command(wineBin, "reg", "add",
+		`HKCU\Control Panel\Desktop`,
+		"/v", "LogPixels", "/t", "REG_DWORD",
+		"/d", fmt.Sprintf("%d", dpi), "/f",
+	)
+	cmd.Env = append(os.Environ(), "WINEPREFIX="+pfx)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintln(os.Stderr, "Failed:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Scale set to %d DPI for %s\n", dpi, selected.name)
+}
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "size" {
+		cmdSize()
+		return
+	}
+
 	trainerExe := ""
 	if len(os.Args) > 1 {
 		trainerExe = os.Args[1]
