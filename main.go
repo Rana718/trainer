@@ -15,7 +15,7 @@ import (
 
 var steamDir = filepath.Join(os.Getenv("HOME"), ".local/share/Steam")
 
-// Parse a VDF file and return key->value pairs (flat, case-insensitive keys)
+// reads a text VDF and returns flat key->value pairs
 func parseVDF(path string) map[string]string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -34,14 +34,13 @@ func parseVDF(path string) map[string]string {
 	return result
 }
 
-// Parse binary shortcuts.vdf and return appID -> AppName map for non-Steam games
+// shortcuts.vdf is binary — walk it manually to get appID -> exe name for non-Steam games
 func parseShortcuts() map[string]string {
 	result := map[string]string{}
 	userdata := filepath.Join(steamDir, "userdata")
 	entries, _ := os.ReadDir(userdata)
 	for _, e := range entries {
-		path := filepath.Join(userdata, e.Name(), "config/shortcuts.vdf")
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(filepath.Join(userdata, e.Name(), "config/shortcuts.vdf"))
 		if err != nil {
 			continue
 		}
@@ -55,8 +54,7 @@ func parseShortcuts() map[string]string {
 			if pos+11 > len(data) {
 				break
 			}
-			appidRaw := binary.LittleEndian.Uint32(data[pos+7 : pos+11])
-			appID := fmt.Sprintf("%d", uint32(appidRaw))
+			appID := fmt.Sprintf("%d", binary.LittleEndian.Uint32(data[pos+7:pos+11]))
 			namePos := bytes.Index(data[pos:], []byte("\x01AppName\x00"))
 			if namePos != -1 {
 				namePos += pos + 9
@@ -71,7 +69,7 @@ func parseShortcuts() map[string]string {
 	return result
 }
 
-// Get game name from appmanifest ACF files across all library folders
+// looks up game name from appmanifest ACF across all Steam library folders
 func gameName(appID string) string {
 	libs := []string{filepath.Join(steamDir, "steamapps")}
 	vdf := parseVDF(filepath.Join(steamDir, "steamapps/libraryfolders.vdf"))
@@ -81,8 +79,7 @@ func gameName(appID string) string {
 		}
 	}
 	for _, lib := range libs {
-		acf := filepath.Join(lib, "appmanifest_"+appID+".acf")
-		m := parseVDF(acf)
+		m := parseVDF(filepath.Join(lib, "appmanifest_"+appID+".acf"))
 		if n := m["name"]; n != "" {
 			return n
 		}
@@ -90,13 +87,12 @@ func gameName(appID string) string {
 	return ""
 }
 
-// Read per-game compat tool name from config.vdf CompatToolMapping
+// reads which Proton tool Steam assigned to a given appID from config.vdf
 func compatToolName(appID string) string {
 	data, err := os.ReadFile(filepath.Join(steamDir, "config/config.vdf"))
 	if err != nil {
 		return ""
 	}
-	// Find the appID block inside CompatToolMapping and grab "name"
 	re := regexp.MustCompile(`(?s)"` + regexp.QuoteMeta(appID) + `"\s*\{[^}]*"name"\s+"([^"]+)"`)
 	m := re.FindSubmatch(data)
 	if len(m) == 2 {
@@ -105,15 +101,14 @@ func compatToolName(appID string) string {
 	return ""
 }
 
-// Resolve compat tool name -> proton executable path
-// Searches: steamapps/common, compatibilitytools.d (user + system)
+// finds the proton binary by matching the tool name against compatibilitytool.vdf
+// checks steamapps/common, user compatibilitytools.d, and system-wide /usr/share/steam
 func findProton(toolName string) string {
 	searchDirs := []string{
 		filepath.Join(steamDir, "steamapps/common"),
 		filepath.Join(os.Getenv("HOME"), ".local/share/Steam/compatibilitytools.d"),
 		"/usr/share/steam/compatibilitytools.d",
 	}
-
 	for _, base := range searchDirs {
 		entries, err := os.ReadDir(base)
 		if err != nil {
@@ -124,11 +119,8 @@ func findProton(toolName string) string {
 				continue
 			}
 			dir := filepath.Join(base, e.Name())
-
-			// Match by internal tool name in compatibilitytool.vdf
 			cvdf := filepath.Join(dir, "compatibilitytool.vdf")
 			if data, err := os.ReadFile(cvdf); err == nil {
-				// internal key is the quoted name before the block
 				re := regexp.MustCompile(`"([^"]+)"\s*(?://[^\n]*)?\s*\{`)
 				for _, m := range re.FindAllSubmatch(data, -1) {
 					if strings.EqualFold(string(m[1]), toolName) {
@@ -139,8 +131,7 @@ func findProton(toolName string) string {
 					}
 				}
 			}
-
-			// Also match by directory name (e.g. "Proton - Experimental" for proton_experimental)
+			// fuzzy match by directory name
 			normalized := strings.ToLower(strings.ReplaceAll(e.Name(), " ", "_"))
 			normalizedTool := strings.ToLower(strings.ReplaceAll(toolName, "-", "_"))
 			if strings.Contains(normalized, normalizedTool) || strings.Contains(normalizedTool, strings.ToLower(e.Name())) {
@@ -154,18 +145,15 @@ func findProton(toolName string) string {
 	return ""
 }
 
-// Special case: map Steam internal names like "proton_experimental" to dir names
+// last resort: match by stripping "proton_" prefix and comparing loosely
+// handles cases like proton_experimental -> "Proton - Experimental"
 func findProtonFallback(toolName string) string {
-	// proton_experimental -> "Proton - Experimental"
-	// proton_9 -> "Proton 9.0"  etc.
 	base := filepath.Join(steamDir, "steamapps/common")
 	entries, _ := os.ReadDir(base)
 	tl := strings.ToLower(strings.ReplaceAll(toolName, "_", " "))
 	for _, e := range entries {
 		el := strings.ToLower(e.Name())
-		// strip "proton - " or "proton " prefix for comparison
-		el2 := strings.TrimPrefix(el, "proton - ")
-		el2 = strings.TrimPrefix(el2, "proton ")
+		el2 := strings.TrimPrefix(strings.TrimPrefix(el, "proton - "), "proton ")
 		tl2 := strings.TrimPrefix(tl, "proton ")
 		if strings.Contains(el, tl) || strings.Contains(el2, tl2) {
 			p := filepath.Join(base, e.Name(), "proton")
@@ -218,14 +206,13 @@ func prompt(msg string) string {
 	return strings.TrimSpace(sc.Text())
 }
 
-func cmdSize() {
+func pickGame() game {
 	games := listGames()
 	fmt.Println("=== Installed Games (compatdata) ===")
 	for i, g := range games {
 		fmt.Printf("  [%d] %s (AppID: %s)\n", i+1, g.name, g.appID)
 	}
 	fmt.Println()
-
 	choice := prompt("Select game number: ")
 	idx := 0
 	fmt.Sscanf(choice, "%d", &idx)
@@ -233,7 +220,30 @@ func cmdSize() {
 		fmt.Fprintln(os.Stderr, "Invalid selection")
 		os.Exit(1)
 	}
-	selected := games[idx-1]
+	return games[idx-1]
+}
+
+func resolveProton(appID string) string {
+	toolName := compatToolName(appID)
+	if toolName == "" {
+		fmt.Fprintln(os.Stderr, "No compat tool found for", appID)
+		os.Exit(1)
+	}
+	p := findProton(toolName)
+	if p == "" {
+		p = findProtonFallback(toolName)
+	}
+	if p == "" {
+		fmt.Fprintf(os.Stderr, "Proton not found for tool: %s\n", toolName)
+		os.Exit(1)
+	}
+	return p
+}
+
+// trainer size — sets Wine DPI (window scale) for a prefix without launching anything
+func cmdSize() {
+	selected := pickGame()
+	protonPath := resolveProton(selected.appID)
 
 	fmt.Println("\nScale options:")
 	fmt.Println("  [1] Low    (96 DPI  - 100%)")
@@ -243,34 +253,21 @@ func cmdSize() {
 	fmt.Println("  [5] Custom (enter DPI manually)")
 	fmt.Println()
 
-	scaleChoice := prompt("Select scale: ")
 	scaleIdx := 0
-	fmt.Sscanf(scaleChoice, "%d", &scaleIdx)
+	fmt.Sscanf(prompt("Select scale: "), "%d", &scaleIdx)
 
 	dpiMap := map[int]int{1: 96, 2: 120, 3: 144, 4: 192}
 	dpi, ok := dpiMap[scaleIdx]
 	if !ok {
-		if scaleIdx == 5 {
-			raw := prompt("Enter DPI value: ")
-			fmt.Sscanf(raw, "%d", &dpi)
-			if dpi < 96 || dpi > 480 {
-				fmt.Fprintln(os.Stderr, "Invalid DPI (96-480)")
-				os.Exit(1)
-			}
-		} else {
+		if scaleIdx != 5 {
 			fmt.Fprintln(os.Stderr, "Invalid selection")
 			os.Exit(1)
 		}
-	}
-
-	toolName := compatToolName(selected.appID)
-	protonPath := findProton(toolName)
-	if protonPath == "" {
-		protonPath = findProtonFallback(toolName)
-	}
-	if protonPath == "" {
-		fmt.Fprintf(os.Stderr, "Proton not found for tool: %s\n", toolName)
-		os.Exit(1)
+		fmt.Sscanf(prompt("Enter DPI value: "), "%d", &dpi)
+		if dpi < 96 || dpi > 480 {
+			fmt.Fprintln(os.Stderr, "Invalid DPI (96-480)")
+			os.Exit(1)
+		}
 	}
 
 	wineBin := filepath.Join(filepath.Dir(protonPath), "files/bin/wine")
@@ -310,54 +307,24 @@ func main() {
 		os.Exit(1)
 	}
 
-	games := listGames()
-	fmt.Println("=== Installed Games (compatdata) ===")
-	for i, g := range games {
-		fmt.Printf("  [%d] %s (AppID: %s)\n", i+1, g.name, g.appID)
-	}
-	fmt.Println()
-
-	choice := prompt("Select game number: ")
-	idx := 0
-	fmt.Sscanf(choice, "%d", &idx)
-	if idx < 1 || idx > len(games) {
-		fmt.Fprintln(os.Stderr, "Invalid selection")
-		os.Exit(1)
-	}
-	selected := games[idx-1]
-
-	toolName := compatToolName(selected.appID)
-	if toolName == "" {
-		fmt.Fprintln(os.Stderr, "No compat tool found for", selected.appID)
-		os.Exit(1)
-	}
-
-	protonPath := findProton(toolName)
-	if protonPath == "" {
-		protonPath = findProtonFallback(toolName)
-	}
-	if protonPath == "" {
-		fmt.Fprintf(os.Stderr, "Proton not found for tool: %s\n", toolName)
-		os.Exit(1)
-	}
+	selected := pickGame()
+	protonPath := resolveProton(selected.appID)
 
 	fmt.Printf("\nRunning:  %s\n", filepath.Base(trainerExe))
 	fmt.Printf("Game:     %s (%s)\n", selected.name, selected.appID)
-	fmt.Printf("Proton:   %s\n", protonPath)
-	fmt.Println()
+	fmt.Printf("Proton:   %s\n\n", protonPath)
 
 	cmd := exec.Command(protonPath, "run", trainerExe)
 	cmd.Env = append(os.Environ(),
 		"STEAM_COMPAT_DATA_PATH="+filepath.Join(steamDir, "steamapps/compatdata", selected.appID),
 		"STEAM_COMPAT_CLIENT_INSTALL_PATH="+steamDir,
 	)
-	// Detach into its own session so it survives after we exit
+	// new session so the process keeps running after trainer exits
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	if err := cmd.Start(); err != nil {
 		fmt.Fprintln(os.Stderr, "Failed to start:", err)
 		os.Exit(1)
 	}
-
 	fmt.Printf("Started (PID %d). To stop: kill %d\n", cmd.Process.Pid, cmd.Process.Pid)
 }
