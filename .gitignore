@@ -1,0 +1,8 @@
+# binary
+trainer
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
