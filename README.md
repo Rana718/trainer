@@ -27,27 +27,40 @@ go install github.com/Rana718/trainer
 ### Run a trainer
 
 ```bash
-trainer <path/to/trainer.exe>
+trainer
 ```
 
-Shows your installed games (by name, not AppID), you pick one, and it launches the `.exe` through that game's Proton prefix — detached, so your terminal is free immediately.
+No path needed — a native file picker opens so you can browse and select your `.exe`:
+
+![File picker](pic/Screenshot%20From%202026-05-30%2010-52-41.png)
+
+Then pick the game using arrow keys:
 
 ```
-=== Installed Games (compatdata) ===
-  [1] Proton Experimental (AppID: 1493710)
-  [2] setup.exe (AppID: 2208168421)
-  [3] DS2.exe (AppID: 3965675259)
+=== Select Game ===
 
-Select game number: 3
+  ❯ Dark Souls II                            3965675259
+    Proton Experimental                      1493710
+    setup.exe                                2208168421
 
+  ↑/↓ navigate  enter select  q quit
+```
+
+Or pass the path directly to skip the file picker:
+
+```bash
+trainer path/to/trainer.exe
+```
+
+After selecting, it launches detached so your terminal is free:
+
+```
 Running:  trainer.exe
-Game:     DS2.exe (3965675259)
+Game:     Dark Souls II (3965675259)
 Proton:   /usr/share/steam/compatibilitytools.d/proton-cachyos-slr/proton
 
 Started (PID 12345). To stop: kill 12345
 ```
-
-To stop it later: `kill <PID>` or just close the trainer window.
 
 ---
 
@@ -57,15 +70,18 @@ To stop it later: `kill <PID>` or just close the trainer window.
 trainer size
 ```
 
-Useful for non-Steam Windows apps that open tiny on HiDPI screens. Sets the `LogPixels` registry key in the game's Wine prefix — no window opens, just writes the config.
+Useful for non-Steam Windows apps that open tiny on HiDPI screens. Sets the `LogPixels` registry key in the game's Wine prefix.
+
+Pick scale with arrow keys:
 
 ```
-Scale options:
-  [1] Low    (96 DPI  - 100%)
-  [2] Medium (120 DPI - 125%)
-  [3] High   (144 DPI - 150%)
-  [4] XHigh  (192 DPI - 200%)
-  [5] Custom (enter DPI manually)
+=== Select Scale ===
+
+  ❯ Low    (96 DPI  - 100%)
+    Medium (120 DPI - 125%)
+    High   (144 DPI - 150%)
+    XHigh  (192 DPI - 200%)
+    Custom (enter DPI manually)
 ```
 
 Takes effect the next time you launch the app through that prefix.
@@ -75,7 +91,7 @@ Takes effect the next time you launch the app through that prefix.
 ## How it works
 
 - Reads `~/.local/share/Steam/steamapps/compatdata/` to list all prefixes
-- Resolves game names from `appmanifest_*.acf` files (Steam games) and `shortcuts.vdf` (non-Steam games added to Steam)
+- Resolves game names from `appmanifest_*.acf` files (Steam games) and `shortcuts.vdf` (non-Steam games)
 - Reads `~/.local/share/Steam/config/config.vdf` to find which Proton tool Steam assigned to each game
 - Searches for the Proton binary in:
   - `~/.local/share/Steam/steamapps/common/` (official Proton builds)
@@ -91,4 +107,5 @@ Works with any Proton variant: Proton Experimental, GE-Proton, CachyOS Proton, o
 - Linux
 - Steam installed (native or via package manager)
 - At least one game with a Proton prefix set up
+- `zenity` or `kdialog` for the file picker (falls back to terminal prompt if neither is installed)
 - Go 1.26+ (only needed to build)

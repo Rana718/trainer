@@ -123,6 +123,7 @@ func main() {
 		trainerExe = os.Args[1]
 	}
 	if trainerExe == "" {
+		fmt.Println("Select your .exe file...")
 		trainerExe = pickFile()
 	}
 	if _, err := os.Stat(trainerExe); err != nil {
