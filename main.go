@@ -112,9 +112,36 @@ func cmdSize() {
 	fmt.Printf("Scale set to %d DPI for %s\n", dpi, selected.Name)
 }
 
+func cmdIdeaClean() {
+	base := filepath.Join(os.Getenv("HOME"), ".config/JetBrains")
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "Cannot read JetBrains config:", err)
+		os.Exit(1)
+	}
+	found := false
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		key := filepath.Join(base, e.Name(), "idea.key")
+		if err := os.Remove(key); err == nil {
+			fmt.Println("Deleted:", key)
+			found = true
+		}
+	}
+	if !found {
+		fmt.Println("No idea.key files found.")
+	}
+}
+
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "size" {
 		cmdSize()
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "idea-clean" {
+		cmdIdeaClean()
 		return
 	}
 
