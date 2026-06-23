@@ -2,12 +2,14 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/Rana718/trainer/internal/steam"
 	"github.com/Rana718/trainer/internal/ui"
@@ -113,26 +115,129 @@ func cmdSize() {
 }
 
 func cmdIdeaClean() {
-	base := filepath.Join(os.Getenv("HOME"), ".config/JetBrains")
+	home := os.Getenv("HOME")
+	base := filepath.Join(home, ".config/JetBrains")
 	entries, err := os.ReadDir(base)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "Cannot read JetBrains config:", err)
 		os.Exit(1)
 	}
+
 	found := false
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		key := filepath.Join(base, e.Name(), "idea.key")
-		if err := os.Remove(key); err == nil {
-			fmt.Println("Deleted:", key)
+		dir := filepath.Join(base, e.Name())
+
+		// Remove idea.key
+		if err := os.Remove(filepath.Join(dir, "idea.key")); err == nil {
+			fmt.Println("Deleted: idea.key in", e.Name())
+			found = true
+		}
+
+		// Reset trial entries in other.xml
+		otherXML := filepath.Join(dir, "options/other.xml")
+		if resetTrialInOtherXML(otherXML) {
+			fmt.Println("Reset trial in:", e.Name()+"/options/other.xml")
+			found = true
+		}
+
+		// Remove eval directory
+		evalDir := filepath.Join(dir, "eval")
+		if err := os.RemoveAll(evalDir); err == nil {
+			if _, serr := os.Stat(evalDir); serr != nil {
+				// dir existed and was removed
+			}
 			found = true
 		}
 	}
-	if !found {
-		fmt.Println("No idea.key files found.")
+
+	// Reset device IDs in Java prefs
+	prefsFile := filepath.Join(home, ".java/.userPrefs/jetbrains/prefs.xml")
+	if err := os.Remove(prefsFile); err == nil {
+		fmt.Println("Deleted: ~/.java/.userPrefs/jetbrains/prefs.xml")
+		found = true
 	}
+
+	if !found {
+		fmt.Println("Nothing to clean.")
+	} else {
+		fmt.Println("\nDone. Trial should be reset on next launch.")
+	}
+}
+
+func resetTrialInOtherXML(path string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+
+	content := string(data)
+	// Find the JSON-like properties section and parse/modify trial keys
+	// The file is XML but contains JSON inside a <property> value
+	// We need to find "keyToString" map and reset trial entries
+
+	type OtherXML struct {
+		KeyToString     map[string]interface{} `json:"keyToString"`
+		KeyToStringList map[string]interface{} `json:"keyToStringList"`
+	}
+
+	// Extract JSON content between <component> tags with properties
+	startMarker := `<component name="PropertiesComponent">`
+	endMarker := `</component>`
+	startIdx := strings.Index(content, startMarker)
+	if startIdx < 0 {
+		return false
+	}
+	startIdx += len(startMarker)
+	endIdx := strings.Index(content[startIdx:], endMarker)
+	if endIdx < 0 {
+		return false
+	}
+	jsonStr := strings.TrimSpace(content[startIdx : startIdx+endIdx])
+
+	var props OtherXML
+	if err := json.Unmarshal([]byte(jsonStr), &props); err != nil {
+		return false
+	}
+
+	if props.KeyToString == nil {
+		return false
+	}
+
+	modified := false
+	// Reset expiration to 30 days from now
+	newExpiry := fmt.Sprintf("%d", time.Now().AddDate(0, 0, 30).UnixMilli())
+	if _, ok := props.KeyToString["trial.state.free.trial.expiration.date"]; ok {
+		props.KeyToString["trial.state.free.trial.expiration.date"] = newExpiry
+		modified = true
+	}
+	if _, ok := props.KeyToString["trial.state.last.availability.check"]; ok {
+		props.KeyToString["trial.state.last.availability.check"] = fmt.Sprintf("%d", time.Now().UnixMilli())
+		modified = true
+	}
+	if _, ok := props.KeyToString["trial.state.last.state"]; ok {
+		props.KeyToString["trial.state.last.state"] = "ACTIVE"
+		modified = true
+	}
+
+	// Remove shown versions list so banner shows again fresh
+	if props.KeyToStringList != nil {
+		delete(props.KeyToStringList, "trial.active.editor.tab.shown.versions")
+	}
+
+	if !modified {
+		return false
+	}
+
+	newJSON, err := json.MarshalIndent(props, "  ", "  ")
+	if err != nil {
+		return false
+	}
+
+	newContent := content[:startIdx] + "\n  " + string(newJSON) + "\n  " + content[startIdx+endIdx:]
+	return os.WriteFile(path, []byte(newContent), 0644) == nil
 }
 
 func main() {
